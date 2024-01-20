@@ -8,6 +8,7 @@ HAVE_CDROM = 0
 USE_PER_SOUND_CHANNELS_CONFIG = 1
 LOW_MEMORY = 0
 MAX_ROM_SIZE = 10485760
+EMULATORJS_THREADS ?= 0
 
 CORE_DIR := .
 
@@ -425,6 +426,11 @@ else ifeq ($(platform), emscripten)
    TARGET := $(TARGET_NAME)_libretro_$(platform).bc
    ENDIANNESS_DEFINES := -DLSB_FIRST -DALIGN_LONG -DBYTE_ORDER=LITTLE_ENDIAN -DHAVE_ZLIB
    STATIC_LINKING = 1
+   ifeq ($(EMULATORJS_THREADS), 1)
+      LDFLAGS += -pthread
+      CFLAGS += -pthread
+      CXXFLAGS += -pthread
+   endif
 
 # RS90
 else ifeq ($(platform), rs90)
