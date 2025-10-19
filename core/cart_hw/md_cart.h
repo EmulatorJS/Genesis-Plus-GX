@@ -2,7 +2,7 @@
  *  Genesis Plus
  *  Mega Drive cartridge hardware support
  *
- *  Copyright (C) 2007-2024  Eke-Eke (Genesis Plus GX)
+ *  Copyright (C) 2007-2025  Eke-Eke (Genesis Plus GX)
  *
  *  Most cartridge protections were initially documented by Haze
  *  (http://haze.mameworld.info/)
@@ -65,6 +65,7 @@
 #define HW_J_CART   0x04
 #define HW_LOCK_ON  0x08
 #define HW_MEGASD   0x10
+#define HW_YX5200   0x20
 
 /* Cartridge extra hardware */
 typedef struct

@@ -2,7 +2,7 @@
  *  Genesis Plus
  *  Mega Drive cartridge hardware support
  *
- *  Copyright (C) 2007-2024  Eke-Eke (Genesis Plus GX)
+ *  Copyright (C) 2007-2025  Eke-Eke (Genesis Plus GX)
  *
  *  Many cartridge protections were initially documented by Haze
  *  (http://haze.mameworld.info/)
@@ -44,6 +44,8 @@
 #include "shared.h"
 #include "eeprom_i2c.h"
 #include "eeprom_spi.h"
+#include "flash_cfi.h"
+#include "yx5200.h"
 #include "megasd.h"
 
 /* Cart database entry */
@@ -66,8 +68,11 @@ static void mapper_sf004_w(uint32 address, uint32 data);
 static uint32 mapper_sf004_r(uint32 address);
 static void mapper_t5740_w(uint32 address, uint32 data);
 static uint32 mapper_t5740_r(uint32 address);
-static void mapper_flashkit_w(uint32 address, uint32 data);
-static uint32 mapper_flashkit_r(uint32 address);
+static void mapper_flash_w8(uint32 address, uint32 data);
+static void mapper_flash_w16(uint32 address, uint32 data);
+static uint32 mapper_flash_r8(uint32 address);
+static uint32 mapper_flash_r16(uint32 address);
+static void mapper_kaiserwave_w(uint32 address, uint32 data);
 static uint32 mapper_smw_64_r(uint32 address);
 static void mapper_smw_64_w(uint32 address, uint32 data);
 static void mapper_realtec_w(uint32 address, uint32 data);
@@ -420,6 +425,21 @@ void md_cart_init(void)
         zbank_memory_map[sram.start >> 16].read   = sram_read_byte;
         zbank_memory_map[sram.start >> 16].write  = sram_write_byte;
       }
+
+      /* Barkley Shut Up and Jam 2 needs SRAM to be mapped in whole upper 2MB area */
+      if (strstr(rominfo.product,"T-119186") != NULL)
+      {
+        for (i=0x21; i<0x40; i++)
+        {
+          m68k.memory_map[i].base    = sram.sram;
+          m68k.memory_map[i].read8   = sram_read_byte;
+          m68k.memory_map[i].read16  = sram_read_word;
+          m68k.memory_map[i].write8  = sram_write_byte;
+          m68k.memory_map[i].write16 = sram_write_word;
+          zbank_memory_map[i].read   = sram_read_byte;
+          zbank_memory_map[i].write  = sram_write_byte;
+        }
+      }
     }
 
     /* support for Triple Play 96 & Triple Play - Gold Edition mapping */
@@ -521,9 +541,10 @@ void md_cart_init(void)
 
   /* detect specific mappers */
   else if (strstr(rominfo.international,"DEMONS OF ASTEBORG") ||
-           strstr(rominfo.international,"ASTEBROS"))
+           strstr(rominfo.international,"ASTEBROS") ||
+           strstr(rominfo.domestic,"DAEMON CLAW"))
   {
-    /* default SSF2+SRAM mapper (fixes Steam versions which incorrectly use Everdrive extended SSF mapper indicator in ROM header) */ 
+    /* default SSF2+SRAM mapper (fixes patched versions incorrectly indicating Everdrive extended SSF mapper in ROM header) */ 
     cart.hw.time_w = default_time_w;
   }
   else if (strstr(rominfo.consoletype,"SEGA SSF"))
@@ -645,10 +666,72 @@ void md_cart_init(void)
   }
   else if (strstr(rominfo.ROMType,"GM") && strstr(rominfo.product,"00000000-42"))
   {
-    /* Flashkit MD mapper */
-    m68k.memory_map[0x00].write8 = mapper_flashkit_w;
-    m68k.memory_map[0x00].write16 = mapper_flashkit_w;
-    zbank_memory_map[0x00].write = mapper_flashkit_w;
+    /* initialize CFI flash memory hardware */
+    flash_cfi_init(M29W320EB);
+
+    /* Flashkit-MD mapper (4MB ROM only) */
+    m68k.memory_map[0x00].read8   = mapper_flash_r8;
+    m68k.memory_map[0x00].read16  = mapper_flash_r16;
+    m68k.memory_map[0x00].write8  = mapper_flash_w8;
+    m68k.memory_map[0x00].write16 = mapper_flash_w16;
+    zbank_memory_map[0x00].read   = mapper_flash_r8;
+    zbank_memory_map[0x00].write  = mapper_flash_w8;
+  }
+  else if (strstr(rominfo.ROMType,"GM") && strstr(rominfo.product,"00000000-00") && 
+           (((rominfo.checksum == 0xcdf5) && (rominfo.realchecksum == 0x603a)) || /* Life on Mars */
+            ((rominfo.checksum == 0x6bd5) && (rominfo.realchecksum == 0x1fea))))  /* Life on Earth Reimagined */
+  {
+    /* initialize CFI flash memory hardware */
+    flash_cfi_init(S29GL064N_04);
+
+    /* SGDK flash-save mapper (4MB ROM with backup RAM mapped in last 64KB bank) */
+    /* Note: upper 4MB of flash memory is apparently unused */
+    m68k.memory_map[0x3f].base    = sram.sram;
+    m68k.memory_map[0x00].read8   = m68k.memory_map[0x3f].read8   = mapper_flash_r8;
+    m68k.memory_map[0x00].read16  = m68k.memory_map[0x3f].read16  = mapper_flash_r16;
+    m68k.memory_map[0x00].write8  = m68k.memory_map[0x3f].write8  = mapper_flash_w8;
+    m68k.memory_map[0x00].write16 = m68k.memory_map[0x3f].write16 = mapper_flash_w16;
+    zbank_memory_map[0x00].read   = zbank_memory_map[0x3f].read   = mapper_flash_r8;
+    zbank_memory_map[0x00].write  = zbank_memory_map[0x3f].write  = mapper_flash_w8;
+  }
+  else if (strstr(rominfo.ROMType,"GM") && strstr(rominfo.product,"00000000-00") && 
+           (((rominfo.checksum == 0x45c1) && (rominfo.realchecksum == 0xc613))))  /*  The Secret Of The Four Winds */
+  {
+    /* KAISER WAVE board !TIME handler */ 
+    cart.hw.time_w = mapper_kaiserwave_w;
+
+    /* enable YX5200 hardware */
+    cart.special |= HW_YX5200;
+
+    /* allocate & clear blip buffer for YX5200 audio stream */
+    snd.blips[3] = blip_new(snd.sample_rate / 10);
+    if (snd.blips[3]) blip_clear(snd.blips[3]);
+
+    /* initialize YX5200 audio */
+    yx5200_init(snd.sample_rate);
+
+    /* initialize CFI flash memory hardware */
+    flash_cfi_init(S29GL064N_04);
+
+    /* SGDK flash-save mapping (4MB ROM with backup RAM mapped in last 64KB bank) */
+    m68k.memory_map[0x3f].base    = sram.sram;
+    m68k.memory_map[0x00].read8   = m68k.memory_map[0x3f].read8   = mapper_flash_r8;
+    m68k.memory_map[0x00].read16  = m68k.memory_map[0x3f].read16  = mapper_flash_r16;
+    m68k.memory_map[0x00].write8  = m68k.memory_map[0x3f].write8  = mapper_flash_w8;
+    m68k.memory_map[0x00].write16 = m68k.memory_map[0x3f].write16 = mapper_flash_w16;
+    zbank_memory_map[0x00].read   = zbank_memory_map[0x3f].read   = mapper_flash_r8;
+    zbank_memory_map[0x00].write  = zbank_memory_map[0x3f].write  = mapper_flash_w8;
+
+    /* 64M extension mapping (upper 4MB of flash memory is apparently unused but cartridge board uses same signals as described in https://gitlab.com/doragasu/flatmap64) */
+    for (i=0x40; i<0x80; i++)
+    {
+      m68k.memory_map[i].read8    = NULL;
+      m68k.memory_map[i].read16   = NULL;
+      m68k.memory_map[i].write8   = NULL;
+      m68k.memory_map[i].write16  = NULL;
+      zbank_memory_map[i].read    = NULL;
+      zbank_memory_map[i].write   = NULL;
+    }
   }
   else if ((cart.romsize == 0x400000) && 
            (READ_BYTE(cart.rom, 0x200150) == 'C') &&
@@ -804,9 +887,11 @@ void md_cart_init(void)
   /* force Mega CD sound hardware initialization when MegaSD overlay is enabled (if not already initialized)  */
   if ((cart.special & HW_MEGASD) && !snd.blips[1] && !snd.blips[2])
   {
-    /* allocate blip buffers for PCM and CD-DA audio streams */
+    /* allocate & clear blip buffers for PCM and CD-DA audio streams */
     snd.blips[1] = blip_new(snd.sample_rate / 10);
     snd.blips[2] = blip_new(snd.sample_rate / 10);
+    if (snd.blips[1]) blip_clear(snd.blips[1]);
+    if (snd.blips[2]) blip_clear(snd.blips[2]);
 
     /* initialize PCM and CD-DA audio */
     audio_set_rate(snd.sample_rate, snd.frame_rate);
@@ -846,6 +931,12 @@ void md_cart_reset(int hard_reset)
   if (cart.special & HW_MEGASD)
   {
     megasd_reset();
+  }
+
+  /* YX5200 hardware */
+  if (cart.special & HW_YX5200)
+  {
+    yx5200_reset();
   }
 
   /* SVP chip */
@@ -935,6 +1026,18 @@ int md_cart_context_save(uint8 *state)
     bufferptr += megasd_context_save(&state[bufferptr]);
   }
 
+  /* Flash memory hardware */
+  if (m68k.memory_map[0x00].read8 == mapper_flash_r8)
+  {
+    bufferptr += flash_cfi_context_save(&state[bufferptr]);
+  }
+
+  /* YX5200 hardware */
+  if (cart.special & HW_YX5200)
+  {
+    bufferptr += yx5200_context_save(&state[bufferptr]);
+  }
+
   return bufferptr;
 }
 
@@ -995,6 +1098,18 @@ int md_cart_context_load(uint8 *state)
   if (cart.special & HW_MEGASD)
   {
     bufferptr += megasd_context_load(&state[bufferptr]);
+  }
+
+  /* Flash memory hardware */
+  if (m68k.memory_map[0x00].read8 == mapper_flash_r8)
+  {
+    bufferptr += flash_cfi_context_load(&state[bufferptr]);
+  }
+
+  /* YX5200 hardware */
+  if (cart.special & HW_YX5200)
+  {
+    bufferptr += yx5200_context_load(&state[bufferptr]);
   }
 
   return bufferptr;
@@ -1459,43 +1574,54 @@ static uint32 mapper_t5740_r(uint32 address)
 }
 
 /* 
-  FlashKit MD mapper (very limited M29W320xx Flash memory support -- enough for unlicensed games using device signature as protection) 
+  Flash memory mappers
 */
-static void mapper_flashkit_w(uint32 address, uint32 data)
+static void mapper_flash_w8(uint32 address, uint32 data)
 {
-  /* Increment Bus Write counter */
-  cart.hw.regs[0]++;
-
-  /* Wait for 3 consecutive bus writes */
-  if (cart.hw.regs[0] == 3)
+  /* only /LWR is connected (verified on PCB hardware) */
+  if (address & 1)
   {
-    /* assume 'Auto Select' command */
-    m68k.memory_map[0x0].read16 = mapper_flashkit_r;
+    flash_cfi_write(address >> 1, (data << 8) | (data & 0xff));
   }
-  else if (cart.hw.regs[0] == 4)
+  else
   {
-    /* assume 'Read/Reset' command */
-    m68k.memory_map[0x0].read16 = NULL;
-
-    /* reset Bus Write counter */
-    cart.hw.regs[0] = 0;
+    m68k_unused_8_w(address, data);
   }
 }
 
-static uint32 mapper_flashkit_r(uint32 address)
+static void mapper_flash_w16(uint32 address, uint32 data)
 {
-  /* hard-coded device signature */
-  switch (address & 0x06)
-  {
-    case 0x00:  /* Manufacturer Code (STMicroelectronics) */
-      return 0x0020;
-    case 0x02:  /* Device Code (M29W320EB) */
-      return 0x2257;
-    default:    /* not supported */
-      return 0xffff;
-  }
+  flash_cfi_write(address >> 1, data);
 }
 
+static uint32 mapper_flash_r8(uint32 address)
+{
+  uint32 data = flash_cfi_read(address >> 1);
+  return (address & 0x01) ? (data & 0xff) : (data >> 8);;
+}
+
+static uint32 mapper_flash_r16(uint32 address)
+{
+  return flash_cfi_read(address >> 1);;
+}
+
+/* 
+  KAISER WAVE board mapper
+*/
+static void mapper_kaiserwave_w(uint32 address, uint32 data)
+{
+  /* /UWR only */
+  if (!(address & 1))
+  {
+    /* YX5200 RX input line is mapped to D0 */
+    yx5200_write(data & 0x01);
+  }
+  else
+  {
+    m68k_unused_8_w(address, data);
+  }
+}
+ 
 /* 
   Super Mario World 64 (unlicensed) mapper
 */

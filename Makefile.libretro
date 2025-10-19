@@ -391,8 +391,9 @@ else ifneq (,$(filter $(platform), ngc wii wiiu))
    CXX = $(DEVKITPPC)/bin/powerpc-eabi-g++$(EXE_EXT)
    AR = $(DEVKITPPC)/bin/powerpc-eabi-ar$(EXE_EXT)
 	ENDIANNESS_DEFINES := -DBYTE_ORDER=BIG_ENDIAN -DCPU_IS_BIG_ENDIAN=1 -DWORDS_BIGENDIAN=1
-   PLATFORM_DEFINES := -DGEKKO -mcpu=750 -meabi -mhard-float -DALT_RENDER
+   PLATFORM_DEFINES := -DGEKKO -mcpu=750 -meabi -mhard-float -DALT_RENDER -DDISABLE_MANY_OGG_OPEN_FILES
    PLATFORM_DEFINES += -ffunction-sections -fdata-sections -D__wiiu__ -D__wut__
+   PLATFORM_DEFINES += -U__INT32_TYPE__ -U __UINT32_TYPE__ -D__INT32_TYPE__=int
    STATIC_LINKING = 1
    USE_PER_SOUND_CHANNELS_CONFIG = 0
 
@@ -798,7 +799,7 @@ endif
 endif
 
 ifeq ($(SHARED_LIBVORBIS),)
-   TREMOR_SRC_DIR := $(CORE_DIR)/core/tremor
+   TREMOR_SRC_DIR := $(CORE_DIR)/core/sound/tremor
 endif
 
 include $(CORE_DIR)/libretro/Makefile.common
@@ -816,7 +817,7 @@ else
 endif
 
 ifeq ($(HAVE_CHD), 1)
-	DEFINES += -DUSE_LIBCHDR -D_7ZIP_ST -DUSE_LIBRETRO_VFS
+	DEFINES += -DUSE_LIBCHDR
 endif
 
 ifeq ($(USE_PER_SOUND_CHANNELS_CONFIG), 1)
@@ -849,6 +850,7 @@ LIBRETRO_CFLAGS += $(BPP_DEFINES) \
 		$(ENDIANNESS_DEFINES) \
 		$(PLATFORM_DEFINES) \
 		-D__LIBRETRO__ \
+		-DUSE_LIBRETRO_VFS \
 		-DM68K_OVERCLOCK_SHIFT=20 \
 		-DZ80_OVERCLOCK_SHIFT=20 \
 		-DHAVE_YM3438_CORE \
